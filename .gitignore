@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Model checkpoints (large)
+checkpoints/*.pt
+
+# Generated data (large, reproduce via scripts)
+data/generated/images/
+data/generated/annotations.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

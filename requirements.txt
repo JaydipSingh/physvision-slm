@@ -1,0 +1,15 @@
+# Core
+torch>=2.0
+numpy>=1.21
+scipy>=1.7
+
+# Image processing
+Pillow>=9.0
+matplotlib>=3.5
+torchvision>=0.15
+
+# Vision encoder (for "full" config)
+transformers>=4.35
+
+# Optional: for Qwen2-0.5B
+# accelerate>=0.20
