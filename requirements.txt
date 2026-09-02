@@ -1,0 +1,15 @@
+# Core
+torch>=2.0
+torchvision>=0.15      # required: transforms used in training + eval
+numpy>=1.21
+scipy>=1.7
+
+# Image processing
+Pillow>=9.0
+matplotlib>=3.5
+
+# Vision encoder (for "full" config; the "lite" config also uses it lightly)
+transformers>=4.35
+
+# Optional: for Qwen2-0.5B ("full" config)
+# accelerate>=0.20
