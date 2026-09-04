@@ -1,0 +1,19 @@
+{
+  "total_samples": 35596,
+  "baselines": {
+    "random": 0.25297786268120015,
+    "most_frequent": 0.34135857961568716,
+    "text_only_heuristic": 0.3330992246319811
+  },
+  "categories": {
+    "tumor_detection": 14957,
+    "localization": 6580,
+    "parameter": 10800,
+    "quality": 3259
+  },
+  "image_types": {
+    "pet_reconstruction": 24741,
+    "sinogram": 5749,
+    "phantom": 5106
+  }
+}

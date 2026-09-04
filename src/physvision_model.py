@@ -30,6 +30,44 @@ from src.vision_encoder import VisionEncoder, VisionEncoderLite
 from src.projection import VisionProjection, SimpleProjection
 
 
+def _load_tinylm_checkpoint_compatible(lm: nn.Module, ckpt_path: str) -> None:
+    """
+    Load a TinyLM checkpoint while tolerating buffer shape differences
+    (e.g., RoPE tables when max_seq_len changes).
+    """
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = ckpt.get("model", ckpt.get("model_state", ckpt))
+
+    target = lm.state_dict()
+    filtered = {}
+    skipped = []
+
+    for k, v in state.items():
+        # RoPE buffers are deterministic from max_seq_len; keep current model's values.
+        if k in {"rope_cos", "rope_sin"}:
+            skipped.append((k, tuple(v.shape), tuple(target[k].shape) if k in target else None))
+            continue
+
+        if k not in target:
+            skipped.append((k, tuple(v.shape), None))
+            continue
+
+        if target[k].shape != v.shape:
+            skipped.append((k, tuple(v.shape), tuple(target[k].shape)))
+            continue
+
+        filtered[k] = v
+
+    missing, unexpected = lm.load_state_dict(filtered, strict=False)
+
+    if skipped:
+        print("  [LM load] Skipped incompatible keys:")
+        for k, src_shape, dst_shape in skipped:
+            print(f"    - {k}: ckpt {src_shape} -> model {dst_shape}")
+    if missing or unexpected:
+        print(f"  [LM load] missing={len(missing)} unexpected={len(unexpected)}")
+
+
 class PhysVisionModel(nn.Module):
     """
     Full multimodal model: Image → Vision Encoder → Projection → Language Model → Answer
@@ -285,8 +323,7 @@ class PhysVisionModel(nn.Module):
                       max_seq_len=272)  # 256 text + 16 vision tokens
 
         if lm_checkpoint:
-            ckpt = torch.load(lm_checkpoint, map_location="cpu", weights_only=False)
-            lm.load_state_dict(ckpt["model"])
+            _load_tinylm_checkpoint_compatible(lm, lm_checkpoint)
 
         model = cls(
             vision_encoder=vision,
