@@ -1,0 +1,29 @@
+{
+  "generated": "2026-09-04 02:54 UTC",
+  "baselines": {
+    "random": 0.25297786268120015,
+    "most_frequent": 0.34135857961568716,
+    "text_only_heuristic": 0.3330992246319811
+  },
+  "total_eval_samples": 35596,
+  "models": {
+    "lite": {
+      "source_file": "eval_lite_1788411225.json",
+      "checkpoint": "/Users/jdsingh/slm_v0/physvision-slm/checkpoints/stage2_best.pt",
+      "overall_accuracy": 0.11695134284751095,
+      "correct": 4163,
+      "total": 35596,
+      "by_category": {
+        "tumor_detection": 0.16888413451895434,
+        "localization": 0.2060790273556231,
+        "parameter": 0.0,
+        "quality": 0.08622276772015956
+      },
+      "by_image_type": {
+        "pet_reconstruction": 0.05480780890020614,
+        "sinogram": 0.33727604800834926,
+        "phantom": 0.1699960830395613
+      }
+    }
+  }
+}
