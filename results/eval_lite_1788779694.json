@@ -1,0 +1,51 @@
+{
+  "overall_accuracy": 0.43712776716484997,
+  "correct": 15560,
+  "total": 35596,
+  "by_category": {
+    "tumor_detection": 0.6488600655211607,
+    "localization": 0.16109422492401215,
+    "parameter": 0.23685185185185184,
+    "quality": 0.6864068732740104
+  },
+  "by_image_type": {
+    "pet_reconstruction": 0.36894224162321654,
+    "sinogram": 0.8144025047834406,
+    "phantom": 0.3427340383862123
+  },
+  "category_counts": {
+    "tumor_detection": {
+      "correct": 9705,
+      "total": 14957
+    },
+    "localization": {
+      "correct": 1060,
+      "total": 6580
+    },
+    "parameter": {
+      "correct": 2558,
+      "total": 10800
+    },
+    "quality": {
+      "correct": 2237,
+      "total": 3259
+    }
+  },
+  "type_counts": {
+    "pet_reconstruction": {
+      "correct": 9128,
+      "total": 24741
+    },
+    "sinogram": {
+      "correct": 4682,
+      "total": 5749
+    },
+    "phantom": {
+      "correct": 1750,
+      "total": 5106
+    }
+  },
+  "elapsed_seconds": 17780.704392910004,
+  "config": "lite",
+  "checkpoint": "checkpoints/stage2_best.pt"
+}

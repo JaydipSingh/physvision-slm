@@ -1,5 +1,6 @@
 {
-  "generated": "2026-09-04 02:54 UTC",
+  "generated": "2026-09-07 UTC",
+  "note": "Final results after fixing the answer-scoring bug and vision pathway. See RESULTS_SUMMARY.md.",
   "baselines": {
     "random": 0.25297786268120015,
     "most_frequent": 0.34135857961568716,
@@ -8,21 +9,21 @@
   "total_eval_samples": 35596,
   "models": {
     "lite": {
-      "source_file": "eval_lite_1788411225.json",
-      "checkpoint": "/Users/jdsingh/slm_v0/physvision-slm/checkpoints/stage2_best.pt",
-      "overall_accuracy": 0.11695134284751095,
-      "correct": 4163,
+      "source_file": "eval_lite_1788779694.json",
+      "checkpoint": "checkpoints/stage2_best.pt",
+      "overall_accuracy": 0.43712776716484997,
+      "correct": 15560,
       "total": 35596,
       "by_category": {
-        "tumor_detection": 0.16888413451895434,
-        "localization": 0.2060790273556231,
-        "parameter": 0.0,
-        "quality": 0.08622276772015956
+        "quality": 0.6864068732740104,
+        "tumor_detection": 0.6488600655211607,
+        "parameter": 0.23685185185185184,
+        "localization": 0.16109422492401215
       },
       "by_image_type": {
-        "pet_reconstruction": 0.05480780890020614,
-        "sinogram": 0.33727604800834926,
-        "phantom": 0.1699960830395613
+        "sinogram": 0.8144025047834406,
+        "pet_reconstruction": 0.36894224162321654,
+        "phantom": 0.3427340383862123
       }
     }
   }

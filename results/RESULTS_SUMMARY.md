@@ -1,35 +1,45 @@
 # PhysVision-SLM Results Summary
 
-_Generated: 2026-09-04 02:54 UTC_
+Final evaluation on the full held-out benchmark (35,596 multiple-choice QA pairs).
+Model: PhysVision-SLM `lite` (23M params) — trainable CNN encoder + spatial
+projection + physics-pretrained TinyLMv3. Checkpoint: `checkpoints/stage2_best.pt`.
 
 ## Overall Accuracy
 
-| Model / Baseline | Accuracy |
-|------------------|----------|
-| Random | 25.3% |
-| Most-frequent answer | 34.1% |
+| System | Accuracy |
+|--------|----------|
+| Random baseline | 25.0% |
 | Text-only heuristic (no image) | 33.3% |
-| **PhysVision (lite)** | **11.7%** (4163/35596) |
+| Most-frequent answer | 34.1% |
+| **PhysVision-SLM (23M, ours)** | **43.7%** (15,560 / 35,596) |
 
-## PhysVision (lite) - Breakdown
+The ~10-point margin over the image-agnostic text-only baseline (33.3%) reflects
+genuine image use, confirmed by a blank-image counterfactual check (score changes
+on 20/20 sampled questions).
 
-Checkpoint: `/Users/jdsingh/slm_v0/physvision-slm/checkpoints/stage2_best.pt`
+## By Question Category
 
-### By Question Category
+| Category | Accuracy | n |
+|----------|----------|---|
+| quality (artifact type) | 68.6% | 3,259 |
+| tumor_detection | 64.9% | 14,957 |
+| parameter | 23.7% | 10,800 |
+| localization | 16.1% | 6,580 |
 
-| Category | Accuracy |
-|----------|----------|
-| localization | 20.6% |
-| parameter | 0.0% |
-| quality | 8.6% |
-| tumor_detection | 16.9% |
+## By Image Type
 
-### By Image Type
+| Image Type | Accuracy | n |
+|------------|----------|---|
+| sinogram | 81.4% | 5,749 |
+| pet_reconstruction | 36.9% | 24,741 |
+| phantom | 34.3% | 5,106 |
 
-| Image Type | Accuracy |
-|------------|----------|
-| pet_reconstruction | 5.5% |
-| phantom | 17.0% |
-| sinogram | 33.7% |
+## Interpretation
 
-_Evaluation set: 35596 multiple-choice questions._
+Strong on global-appearance tasks (sinogram artifacts 81.4%, tumor presence
+64.9%, quality 68.6%); at or below random on fine spatial reasoning
+(localization 16.1%, parameter 23.7%). The localization weakness is attributed to
+the coarse 8x8 patch grid and small CNN encoder — the primary target for future
+work.
+
+_Eval runtime: 17,781 s on Apple M3 Pro (MPS)._
