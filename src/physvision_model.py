@@ -27,45 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.vision_encoder import VisionEncoder, VisionEncoderLite
-from src.projection import VisionProjection, SimpleProjection
-
-
-def _load_tinylm_checkpoint_compatible(lm: nn.Module, ckpt_path: str) -> None:
-    """
-    Load a TinyLM checkpoint while tolerating buffer shape differences
-    (e.g., RoPE tables when max_seq_len changes).
-    """
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state = ckpt.get("model", ckpt.get("model_state", ckpt))
-
-    target = lm.state_dict()
-    filtered = {}
-    skipped = []
-
-    for k, v in state.items():
-        # RoPE buffers are deterministic from max_seq_len; keep current model's values.
-        if k in {"rope_cos", "rope_sin"}:
-            skipped.append((k, tuple(v.shape), tuple(target[k].shape) if k in target else None))
-            continue
-
-        if k not in target:
-            skipped.append((k, tuple(v.shape), None))
-            continue
-
-        if target[k].shape != v.shape:
-            skipped.append((k, tuple(v.shape), tuple(target[k].shape)))
-            continue
-
-        filtered[k] = v
-
-    missing, unexpected = lm.load_state_dict(filtered, strict=False)
-
-    if skipped:
-        print("  [LM load] Skipped incompatible keys:")
-        for k, src_shape, dst_shape in skipped:
-            print(f"    - {k}: ckpt {src_shape} -> model {dst_shape}")
-    if missing or unexpected:
-        print(f"  [LM load] missing={len(missing)} unexpected={len(unexpected)}")
+from src.projection import VisionProjection, SimpleProjection, SpatialProjection
 
 
 class PhysVisionModel(nn.Module):
@@ -126,9 +88,17 @@ class PhysVisionModel(nn.Module):
         batch_size = input_ids.shape[0]
         device = input_ids.device
 
-        # 1. Extract vision features (frozen encoder)
-        with torch.no_grad():
-            vision_features = self.vision_encoder(pixel_values)  # (B, patches, vision_dim)
+        # 1. Extract vision features.
+        #    If the encoder is frozen (e.g. SigLIP), run under no_grad for
+        #    efficiency. If it is trainable (VisionEncoderLite CNN), it MUST
+        #    run with gradients enabled or it never learns to see.
+        encoder_trainable = any(
+            p.requires_grad for p in self.vision_encoder.parameters())
+        if encoder_trainable:
+            vision_features = self.vision_encoder(pixel_values)
+        else:
+            with torch.no_grad():
+                vision_features = self.vision_encoder(pixel_values)
 
         # 2. Project to text embedding space
         vision_tokens = self.projection(vision_features)  # (B, num_vision_tokens, text_dim)
@@ -298,11 +268,13 @@ class PhysVisionModel(nn.Module):
     @classmethod
     def _build_lite(cls, device: str, lm_checkpoint: Optional[str] = None, **kwargs):
         """Build the lightweight config: ~40M parameters total."""
-        # Vision encoder (trainable CNN, ~5M params)
+        # Vision encoder (trainable CNN, ~5M params) — emits 64 spatial patches
         vision = VisionEncoderLite(output_dim=256, num_output_tokens=64)
 
-        # Projection (simple pooling + linear)
-        proj = SimpleProjection(vision_dim=256, text_dim=384, num_output_tokens=16)
+        # Projection: spatial-preserving (one token per patch, keeps location).
+        # NOTE: SimpleProjection averaged all patches into one vector and made
+        # the model blind to image content; SpatialProjection fixes that.
+        proj = SpatialProjection(vision_dim=256, text_dim=384, num_patches=64)
 
         # Language model (TinyLMv3). Prefer the standalone, dependency-free
         # architecture module; the pretrained checkpoint loads into it because
@@ -319,11 +291,20 @@ class PhysVisionModel(nn.Module):
                 raise ImportError(
                     "Cannot import TinyLMv3 from src.tinylm_v3 or slm_v2.") from e
 
+        # 64 vision tokens + up to 128 text tokens = 192; use 208 for headroom.
+        num_vision_tokens = 64
+        max_seq_len = 208
         lm = TinyLMv3(vocab_size=32000, d_model=384, n_layers=6, n_heads=6,
-                      max_seq_len=272)  # 256 text + 16 vision tokens
+                      max_seq_len=max_seq_len)
 
         if lm_checkpoint:
-            _load_tinylm_checkpoint_compatible(lm, lm_checkpoint)
+            ckpt = torch.load(lm_checkpoint, map_location="cpu", weights_only=False)
+            # RoPE buffers are position-derived and deterministic; skip if the
+            # saved max_seq_len differs. All other weights load normally.
+            state = ckpt["model"]
+            state = {k: v for k, v in state.items()
+                     if not k.startswith("rope_")}
+            lm.load_state_dict(state, strict=False)
 
         model = cls(
             vision_encoder=vision,
@@ -331,8 +312,8 @@ class PhysVisionModel(nn.Module):
             language_model=lm,
             vocab_size=32000,
             text_dim=384,
-            num_vision_tokens=16,
-            max_seq_len=272,
+            num_vision_tokens=num_vision_tokens,
+            max_seq_len=max_seq_len,
         ).to(device)
 
         return model

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Model checkpoints (large) — includes pilot/ subdirs
+checkpoints/**/*.pt
+*.pt
+
+# Generated data (large, reproduce via scripts) — includes pilot data
+data/generated/images/
+data/generated/annotations.json
+data/pilot/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

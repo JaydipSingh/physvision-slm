@@ -146,24 +146,34 @@ def train_stage(
     save_dir = Path(config["save_dir"])
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    # Is the vision encoder a from-scratch trainable CNN (lite) or a frozen
+    # pretrained encoder (SigLIP, full)? A from-scratch CNN MUST be trained or
+    # it stays random and the model never learns to see.
+    encoder_is_pretrained = hasattr(model.vision_encoder, "model")  # SigLIP wrapper
+    train_encoder = not encoder_is_pretrained
+
     # Configure what's trainable
     if stage == 1:
-        # Stage 1: Only projection
+        # Stage 1: alignment — train projection (+ CNN encoder if from-scratch),
+        # keep the language model frozen.
         for p in model.vision_encoder.parameters():
-            p.requires_grad = False
+            p.requires_grad = train_encoder
         for p in model.language_model.parameters():
             p.requires_grad = False
         for p in model.projection.parameters():
             p.requires_grad = True
         model.vision_token_type.requires_grad = True
     else:
-        # Stage 2: Projection + LM (via LoRA if applied externally)
+        # Stage 2: instruction tuning — projection (+ CNN encoder) + LM (LoRA).
         for p in model.vision_encoder.parameters():
-            p.requires_grad = False
+            p.requires_grad = train_encoder
         for p in model.projection.parameters():
             p.requires_grad = True
         # LM params: assume LoRA already injected, so trainable params set
         model.vision_token_type.requires_grad = True
+
+    print(f"  Vision encoder trainable: {train_encoder} "
+          f"({'from-scratch CNN' if train_encoder else 'frozen pretrained'})")
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -234,12 +244,18 @@ def train_stage(
         print(f"\n  Epoch {epoch+1}/{max_epochs}: train_loss={avg_train:.4f}, "
               f"val_loss={avg_val:.4f}")
 
-        # Save best
+        # Save best. Exclude the vision encoder ONLY if it is a frozen
+        # pretrained model (SigLIP); a trained-from-scratch CNN MUST be saved.
+        def _state_to_save():
+            if encoder_is_pretrained:
+                return {k: v for k, v in model.state_dict().items()
+                        if "vision_encoder" not in k}
+            return model.state_dict()
+
         if avg_val < best_val_loss:
             best_val_loss = avg_val
             torch.save({
-                "model_state": {k: v for k, v in model.state_dict().items()
-                                if "vision_encoder" not in k},  # Don't save frozen encoder
+                "model_state": _state_to_save(),
                 "stage": stage,
                 "epoch": epoch + 1,
                 "val_loss": avg_val,
@@ -249,8 +265,7 @@ def train_stage(
 
     # Final save
     torch.save({
-        "model_state": {k: v for k, v in model.state_dict().items()
-                        if "vision_encoder" not in k},
+        "model_state": _state_to_save(),
         "stage": stage,
         "val_loss": best_val_loss,
         "config": config,

@@ -84,11 +84,15 @@ class VisionProjection(nn.Module):
 
 class SimpleProjection(nn.Module):
     """
-    Simpler projection: Average pool vision tokens → single vector → expand.
-    Uses less memory, suitable for very small LMs (35M).
+    DEPRECATED — global-average-pool projection.
 
-    Maps: (batch, num_vision_tokens, vision_dim) → (batch, num_output_tokens, text_dim)
-    Via: avg_pool → Linear → repeat
+    This collapses ALL spatial patches into a single vector via mean(dim=1)
+    before projecting, which DESTROYS the spatial information (tumor location,
+    count, size) that image questions depend on. A model trained with this
+    projection cannot distinguish options that require reading the image, so it
+    falls back to a text-only prior. Kept only for reference / ablation.
+
+    Use SpatialProjection instead.
     """
 
     def __init__(
@@ -108,23 +112,68 @@ class SimpleProjection(nn.Module):
         )
 
     def forward(self, vision_features: torch.Tensor) -> torch.Tensor:
+        # Global average pooling over patches (destroys spatial info!)
+        x = vision_features.mean(dim=1)  # (B, D_v)
+        x = self.proj(x)  # (B, T * D_t)
+        batch = x.shape[0]
+        x = x.view(batch, self.num_output_tokens, self.text_dim)
+        return x
+
+    def count_parameters(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+
+
+class SpatialProjection(nn.Module):
+    """
+    Spatial-preserving projection for the lite config.
+
+    Keeps EVERY patch as its own vision token so spatial information (where the
+    tumor is, how many, how big) survives into the language model. Adds a
+    learned positional embedding per patch so the LM can tell patches apart.
+
+    Maps: (batch, num_patches, vision_dim) -> (batch, num_patches, text_dim)
+
+    Architecture: per-patch MLP (Linear -> GELU -> Linear -> LayerNorm)
+    + learned patch position embedding. No pooling / no averaging.
+    """
+
+    def __init__(
+        self,
+        vision_dim: int = 256,       # VisionEncoderLite output channels
+        text_dim: int = 384,         # Language model d_model
+        num_patches: int = 64,       # CNN produces 8x8 = 64 patches
+        hidden_mult: int = 2,
+    ):
+        super().__init__()
+        self.vision_dim = vision_dim
+        self.text_dim = text_dim
+        self.num_patches = num_patches
+        # Exposed so the model knows how many vision tokens this emits.
+        self.num_output_tokens = num_patches
+
+        hidden_dim = text_dim * hidden_mult
+        self.proj = nn.Sequential(
+            nn.Linear(vision_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, text_dim),
+            nn.LayerNorm(text_dim),
+        )
+        # Learned position embedding per patch (spatial identity).
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, text_dim))
+        nn.init.normal_(self.pos_embed, std=0.02)
+
+    def forward(self, vision_features: torch.Tensor) -> torch.Tensor:
         """
         Args:
             vision_features: (batch, num_patches, vision_dim)
 
         Returns:
-            (batch, num_output_tokens, text_dim)
+            (batch, num_patches, text_dim)  — one token per patch, spatial info kept
         """
-        # Global average pooling over patches
-        x = vision_features.mean(dim=1)  # (B, D_v)
-
-        # Project to full output size
-        x = self.proj(x)  # (B, T * D_t)
-
-        # Reshape to token sequence
-        batch = x.shape[0]
-        x = x.view(batch, self.num_output_tokens, self.text_dim)
-
+        B, V, _ = vision_features.shape
+        x = self.proj(vision_features)          # (B, V, text_dim)
+        if V == self.num_patches:
+            x = x + self.pos_embed              # add spatial position identity
         return x
 
     def count_parameters(self) -> int:

@@ -120,46 +120,59 @@ def evaluate_logprob_ranking(
         category = sample["category"]
         img_type = sample["image_type"]
 
-        # Score each option
+        # Score each option.
+        #
+        # Correct approach (fixes the length-bias / identical-score bug):
+        #   1. Tokenize the FULL "prompt + answer" ONCE so BPE boundaries are
+        #      consistent. Tokenize the prompt alone to get the answer span as a
+        #      strict prefix length.
+        #   2. The model prepends `num_vision_tokens` vision tokens, so text
+        #      token t sits at sequence position (vision + t); its prediction
+        #      comes from logits at position (vision + t - 1).
+        #   3. Length-normalize by the number of scored answer tokens.
+        prompt = f"Question: {question} Answer:"
+        vision_offset = model.num_vision_tokens
+
+        if tokenize_fn:
+            prompt_ids = tokenize_fn(prompt)
+        else:
+            prompt_ids = [ord(c) % 32000 for c in prompt]
+        prompt_len = len(prompt_ids)
+
         option_scores = []
         for option in options:
-            text = f"Question: {question} Answer: {option}"
+            full_text = f"{prompt} {option}"
             if tokenize_fn:
-                token_ids = tokenize_fn(text)[:128]
+                full_ids = tokenize_fn(full_text)
             else:
-                token_ids = [ord(c) % 32000 for c in text][:128]
+                full_ids = [ord(c) % 32000 for c in full_text]
 
-            input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
+            # Answer tokens are everything after the prompt prefix.
+            answer_ids = full_ids[prompt_len:]
+            # Truncate the whole sequence to the model limit, keeping the answer.
+            full_ids = full_ids[:128]
 
+            input_ids = torch.tensor([full_ids], dtype=torch.long, device=device)
             with torch.no_grad():
                 outputs = model(pixel_values, input_ids)
                 logits = outputs["logits"]
-
-            # Compute average log-probability of answer tokens
-            # Find where "Answer:" starts in token sequence
-            answer_start = len(f"Question: {question} Answer: ")
-            if tokenize_fn:
-                answer_token_ids = tokenize_fn(f" {option}")
-                prompt_len = len(tokenize_fn(f"Question: {question} Answer:"))
-            else:
-                answer_token_ids = [ord(c) % 32000 for c in f" {option}"]
-                prompt_len = len([ord(c) % 32000 for c in f"Question: {question} Answer:"])
-
-            # Log-prob of answer tokens (offset by vision token count)
-            vision_offset = model.num_vision_tokens
-            total_offset = vision_offset + prompt_len
-
             log_probs = F.log_softmax(logits[0], dim=-1)
-            avg_lp = 0.0
+
+            # Score each answer token from the logit at the preceding position.
+            total_lp = 0.0
             count = 0
-            for i, tid in enumerate(answer_token_ids):
-                pos = total_offset + i
-                if pos < log_probs.shape[0] and pos > 0:
-                    avg_lp += log_probs[pos - 1, tid].item()
+            for j, tid in enumerate(answer_ids):
+                text_pos = prompt_len + j          # index within text tokens
+                if text_pos >= len(full_ids):
+                    break                           # answer got truncated away
+                seq_pos = vision_offset + text_pos  # position in concat sequence
+                pred_pos = seq_pos - 1              # predicts token at seq_pos
+                if 0 <= pred_pos < log_probs.shape[0]:
+                    total_lp += log_probs[pred_pos, tid].item()
                     count += 1
 
-            avg_lp = avg_lp / max(count, 1)
-            option_scores.append(avg_lp)
+            # Length-normalized average log-prob (mean over answer tokens).
+            option_scores.append(total_lp / max(count, 1))
 
         # Select best option
         predicted_idx = int(np.argmax(option_scores))
