@@ -1,0 +1,51 @@
+{
+  "overall_accuracy": 0.8897909877514327,
+  "correct": 31673,
+  "total": 35596,
+  "by_category": {
+    "tumor_detection": 0.9984622584742929,
+    "localization": 0.6869300911854104,
+    "parameter": 0.8312037037037037,
+    "quality": 0.9947836759742252
+  },
+  "by_image_type": {
+    "pet_reconstruction": 0.8739339557819005,
+    "sinogram": 0.9965211341102801,
+    "phantom": 0.8464551508029768
+  },
+  "category_counts": {
+    "tumor_detection": {
+      "correct": 14934,
+      "total": 14957
+    },
+    "localization": {
+      "correct": 4520,
+      "total": 6580
+    },
+    "parameter": {
+      "correct": 8977,
+      "total": 10800
+    },
+    "quality": {
+      "correct": 3242,
+      "total": 3259
+    }
+  },
+  "type_counts": {
+    "pet_reconstruction": {
+      "correct": 21622,
+      "total": 24741
+    },
+    "sinogram": {
+      "correct": 5729,
+      "total": 5749
+    },
+    "phantom": {
+      "correct": 4322,
+      "total": 5106
+    }
+  },
+  "elapsed_seconds": 86813.24646997452,
+  "config": "full",
+  "checkpoint": "/Users/jdsingh/slm_v0/physvision-slm/checkpoints/full/stage2_best.pt"
+}

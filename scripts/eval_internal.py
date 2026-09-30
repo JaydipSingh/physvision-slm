@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from src.physvision_model import PhysVisionModel
-from src.tokenizer_bridge import get_tokenizer
+from src.tokenizer_bridge import get_tokenizer, get_hf_tokenizer
 
 
 # ============================================================================
@@ -243,6 +243,8 @@ def main():
                         help="Dataset directory")
     parser.add_argument("--config", type=str, default="lite", choices=["lite", "full"],
                         help="Model config")
+    parser.add_argument("--vision-model", type=str, default=None,
+                        help="(full config) HF vision encoder to match training")
     parser.add_argument("--max-samples", type=int, default=None,
                         help="Limit evaluation to N samples")
     parser.add_argument("--lm-checkpoint", type=str, default=None,
@@ -260,8 +262,10 @@ def main():
     print(f"  Device: {device}")
 
     # Build model
-    model = PhysVisionModel.from_config(
-        args.config, device=device, lm_checkpoint=args.lm_checkpoint)
+    build_kwargs = {"lm_checkpoint": args.lm_checkpoint}
+    if args.config == "full" and args.vision_model:
+        build_kwargs["vision_model"] = args.vision_model
+    model = PhysVisionModel.from_config(args.config, device=device, **build_kwargs)
 
     # Load checkpoint if provided
     if args.checkpoint and Path(args.checkpoint).exists():
@@ -282,8 +286,11 @@ def main():
     dataset = PhysVisionEvalDataset(args.data)
     print(f"  Eval samples: {len(dataset)}")
 
-    # Tokenizer: real Rust BPE on Mac, char-level fallback on Windows
-    tokenize_fn = get_tokenizer(vocab_size=32000)
+    # Tokenizer must match the language model used by the config.
+    if args.config == "full":
+        tokenize_fn = get_hf_tokenizer("Qwen/Qwen2-0.5B")
+    else:
+        tokenize_fn = get_tokenizer(vocab_size=32000)
 
     # Run evaluation
     start = time.time()

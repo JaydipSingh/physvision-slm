@@ -319,34 +319,53 @@ class PhysVisionModel(nn.Module):
         return model
 
     @classmethod
-    def _build_full(cls, device: str, **kwargs):
-        """Build the full config: ~900M parameters total (mostly frozen)."""
-        # Vision encoder (frozen SigLIP, ~400M params)
-        vision = VisionEncoder(
-            model_name="google/siglip-so400m-patch14-384",
-            device=device,
-        )
+    def _build_full(cls, device: str, lm_checkpoint: Optional[str] = None,
+                    vision_model: str = "google/siglip-so400m-patch14-384",
+                    lm_model: str = "Qwen/Qwen2-0.5B",
+                    num_output_tokens: int = 64, **kwargs):
+        """
+        Build the full config: SigLIP (frozen) + VisionProjection + Qwen2-0.5B.
 
-        # Projection (learned, ~5M params)
+        Notes:
+          * The `lm_checkpoint` argument is accepted for signature-compatibility
+            with the training script but is IGNORED here: the physics-pretrained
+            TinyLMv3 weights are not compatible with Qwen2. The full config uses
+            stock Qwen2 weights and Qwen2's own tokenizer.
+          * Downloads SigLIP (~1.6GB) and Qwen2-0.5B (~1GB) from HuggingFace on
+            first use.
+        """
+        import torch
+        from transformers import AutoModelForCausalLM
+
+        # Load the LM explicitly in float32. On MPS, mixing float32 and
+        # bf16/f16 tensors in a matmul triggers a hard Metal assertion
+        # ("Destination and Accumulator cannot have different datatype"), so we
+        # keep every component in a single dtype.
+        lm = AutoModelForCausalLM.from_pretrained(lm_model, torch_dtype=torch.float32)
+        text_dim = lm.config.hidden_size          # 896 for Qwen2-0.5B
+        vocab_size = lm.config.vocab_size          # 151936 for Qwen2
+
+        # Vision encoder (frozen SigLIP).
+        vision = VisionEncoder(model_name=vision_model, device=device)
+
+        # Projection: compress SigLIP patches -> num_output_tokens, map to text_dim.
         proj = VisionProjection(
             vision_dim=vision.hidden_dim,
-            text_dim=896,  # Qwen2-0.5B hidden size
+            text_dim=text_dim,
             num_vision_tokens=vision.num_patches,
-            num_output_tokens=64,
+            num_output_tokens=num_output_tokens,
         )
-
-        # Language model (Qwen2-0.5B, LoRA applied separately)
-        from transformers import AutoModelForCausalLM
-        lm = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B")
 
         model = cls(
             vision_encoder=vision,
             projection=proj,
             language_model=lm,
-            vocab_size=151936,  # Qwen2 vocab size
-            text_dim=896,
-            num_vision_tokens=64,
+            vocab_size=vocab_size,
+            text_dim=text_dim,
+            num_vision_tokens=num_output_tokens,
             max_seq_len=512,
-        ).to(device)
+        )
+        # Uniform dtype across all submodules, then move to device.
+        model = model.float().to(device)
 
         return model

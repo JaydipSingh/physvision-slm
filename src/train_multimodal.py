@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from src.physvision_model import PhysVisionModel
-from src.tokenizer_bridge import get_tokenizer
+from src.tokenizer_bridge import get_tokenizer, get_hf_tokenizer
 
 
 # ============================================================================
@@ -164,12 +164,18 @@ def train_stage(
             p.requires_grad = True
         model.vision_token_type.requires_grad = True
     else:
-        # Stage 2: instruction tuning — projection (+ CNN encoder) + LM (LoRA).
+        # Stage 2: instruction tuning — train projection (+ CNN encoder).
+        # The language model is kept FROZEN by default: full fine-tuning of a
+        # 500M-parameter LM (Qwen2, full config) does not fit in 18GB, and the
+        # lite LM is a fixed physics-pretrained backbone. This mirrors the
+        # LLaVA-style setup where the connector carries the adaptation. (LoRA on
+        # the LM is a natural extension but is not enabled here.)
         for p in model.vision_encoder.parameters():
             p.requires_grad = train_encoder
+        for p in model.language_model.parameters():
+            p.requires_grad = False
         for p in model.projection.parameters():
             p.requires_grad = True
-        # LM params: assume LoRA already injected, so trainable params set
         model.vision_token_type.requires_grad = True
 
     print(f"  Vision encoder trainable: {train_encoder} "
@@ -244,13 +250,21 @@ def train_stage(
         print(f"\n  Epoch {epoch+1}/{max_epochs}: train_loss={avg_train:.4f}, "
               f"val_loss={avg_val:.4f}")
 
-        # Save best. Exclude the vision encoder ONLY if it is a frozen
-        # pretrained model (SigLIP); a trained-from-scratch CNN MUST be saved.
+        # Save only the trained parts. Frozen large modules (pretrained SigLIP
+        # encoder, frozen Qwen2 LM) are excluded to keep checkpoints small; they
+        # are reloaded from source at eval time. A trained-from-scratch CNN
+        # encoder (lite) IS saved. The projection and vision_token_type are
+        # always saved.
         def _state_to_save():
-            if encoder_is_pretrained:
-                return {k: v for k, v in model.state_dict().items()
-                        if "vision_encoder" not in k}
-            return model.state_dict()
+            state = model.state_dict()
+            keep = {}
+            for k, v in state.items():
+                if encoder_is_pretrained and k.startswith("vision_encoder"):
+                    continue  # frozen SigLIP — reloaded from HF
+                if encoder_is_pretrained and k.startswith("language_model"):
+                    continue  # frozen Qwen2 — reloaded from HF
+                keep[k] = v
+            return keep
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
@@ -288,6 +302,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--config", type=str, default="lite", choices=["lite", "full"])
+    parser.add_argument("--vision-model", type=str, default=None,
+                        help="(full config) HF vision encoder to use, e.g. "
+                             "google/siglip-base-patch16-224 for a lighter run")
     parser.add_argument("--lm-checkpoint", type=str, default=None,
                         help="Pretrained TinyLMv3 checkpoint (paper 1) to initialize the LM")
     parser.add_argument("--checkpoint", type=str, default=None,
@@ -306,8 +323,10 @@ def main():
     print("=" * 60)
 
     # Build model
-    model = PhysVisionModel.from_config(
-        args.config, device=device, lm_checkpoint=args.lm_checkpoint)
+    build_kwargs = {"lm_checkpoint": args.lm_checkpoint}
+    if args.config == "full" and args.vision_model:
+        build_kwargs["vision_model"] = args.vision_model
+    model = PhysVisionModel.from_config(args.config, device=device, **build_kwargs)
     print(f"  Model: {model.count_parameters():,} total params")
 
     # Resume from a Stage 1 checkpoint if provided (Stage 2 use case)
@@ -319,8 +338,12 @@ def main():
         print(f"  (loaded; {len(missing)} missing / {len(unexpected)} unexpected keys)")
         model.to(device)
 
-    # Build tokenizer (real Rust BPE on Mac; char-level fallback on Windows)
-    tokenize_fn = get_tokenizer(vocab_size=32000)
+    # Build tokenizer. The lite config uses the 32K Rust BPE tokenizer that
+    # TinyLMv3 was trained with; the full config MUST use Qwen2's own tokenizer.
+    if args.config == "full":
+        tokenize_fn = get_hf_tokenizer("Qwen/Qwen2-0.5B")
+    else:
+        tokenize_fn = get_tokenizer(vocab_size=32000)
 
     # Build datasets
     train_dataset = PhysVisionDataset(args.data, split="train", tokenize_fn=tokenize_fn)

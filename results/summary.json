@@ -1,6 +1,6 @@
 {
-  "generated": "2026-09-07 UTC",
-  "note": "Final results after fixing the answer-scoring bug and vision pathway. See RESULTS_SUMMARY.md.",
+  "generated": "2026-09-09 UTC",
+  "note": "Final results: lite and full configs. See RESULTS_SUMMARY.md.",
   "baselines": {
     "random": 0.25297786268120015,
     "most_frequent": 0.34135857961568716,
@@ -24,6 +24,24 @@
         "sinogram": 0.8144025047834406,
         "pet_reconstruction": 0.36894224162321654,
         "phantom": 0.3427340383862123
+      }
+    },
+    "full": {
+      "source_file": "eval_full_1789037462.json",
+      "checkpoint": "checkpoints/full/stage2_best.pt",
+      "overall_accuracy": 0.8897909877514327,
+      "correct": 31673,
+      "total": 35596,
+      "by_category": {
+        "tumor_detection": 0.9984622584742929,
+        "quality": 0.9947836759742252,
+        "parameter": 0.8312037037037037,
+        "localization": 0.6869300911854104
+      },
+      "by_image_type": {
+        "sinogram": 0.9965211341102801,
+        "pet_reconstruction": 0.8739339557819005,
+        "phantom": 0.8464551508029768
       }
     }
   }

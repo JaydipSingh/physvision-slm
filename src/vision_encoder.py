@@ -44,28 +44,76 @@ class VisionEncoder(nn.Module):
 
     def _load_model(self, model_name: str, device: str):
         """Load the vision model from HuggingFace."""
-        from transformers import AutoModel, AutoProcessor
+        from transformers import AutoModel
 
-        self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(device)
+        # Load ONLY the image processor, not the full AutoProcessor. The full
+        # processor also loads the model's TEXT tokenizer (SigLIP's needs
+        # protobuf/sentencepiece), which we never use — we only feed images.
+        self.processor = None
+        try:
+            from transformers import AutoImageProcessor
+            self.processor = AutoImageProcessor.from_pretrained(model_name)
+        except Exception:
+            # Image preprocessing is not required for our pipeline (the dataset
+            # already yields normalized tensors that we resize in forward()),
+            # so a missing processor is non-fatal.
+            self.processor = None
+
+        # Load in float32 explicitly. On MPS, mixing dtypes in a matmul triggers
+        # a hard Metal assertion, so the vision tower must match the rest of the
+        # model (also float32).
+        self.model = AutoModel.from_pretrained(
+            model_name, torch_dtype=torch.float32).to(device)
+        self.model = self.model.float()
         self.model.eval()
 
-        # Detect hidden dimension from a dummy forward pass
-        dummy = torch.randn(1, 3, 384, 384).to(device)
+        # Determine the model's expected input resolution from the processor so
+        # the dummy forward (and real inputs) match. SigLIP-SO400M/14 uses 384.
+        self.input_size = self._detect_input_size()
+
+        # Detect hidden dimension and patch count from a dummy forward pass.
+        dummy = torch.randn(1, 3, self.input_size, self.input_size).to(device)
         with torch.no_grad():
-            if hasattr(self.model, 'vision_model'):
-                out = self.model.vision_model(dummy)
-                features = out.last_hidden_state
-            elif hasattr(self.model, 'get_image_features'):
-                features = self.model.get_image_features(dummy)
-                if features.dim() == 2:
-                    features = features.unsqueeze(1)
-            else:
-                out = self.model(dummy)
-                features = out.last_hidden_state
+            features = self._extract(dummy)
 
         self._hidden_dim = features.shape[-1]
         self._num_patches = features.shape[1]
+
+    def _detect_input_size(self) -> int:
+        """Best-effort detection of the encoder's expected square input size."""
+        size = 384
+        if self.processor is None:
+            # Fall back to the model config's image_size if available.
+            try:
+                vcfg = getattr(self.model.config, "vision_config", self.model.config)
+                size = getattr(vcfg, "image_size", size)
+            except Exception:
+                pass
+            return int(size)
+        try:
+            ip = getattr(self.processor, "image_processor", self.processor)
+            s = getattr(ip, "size", None)
+            if isinstance(s, dict):
+                size = s.get("height") or s.get("width") or s.get("shortest_edge") or size
+            elif isinstance(s, int):
+                size = s
+        except Exception:
+            pass
+        return int(size)
+
+    def _extract(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Run the vision tower and return (B, num_patches, hidden_dim)."""
+        if hasattr(self.model, 'vision_model'):
+            out = self.model.vision_model(pixel_values)
+            features = out.last_hidden_state
+        elif hasattr(self.model, 'get_image_features'):
+            features = self.model.get_image_features(pixel_values)
+            if features.dim() == 2:
+                features = features.unsqueeze(1)
+        else:
+            out = self.model(pixel_values)
+            features = getattr(out, "last_hidden_state", out)
+        return features
 
     @property
     def hidden_dim(self) -> int:
@@ -83,27 +131,28 @@ class VisionEncoder(nn.Module):
     @torch.no_grad()
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """
-        Extract features from preprocessed images.
+        Extract features from images.
 
         Args:
-            pixel_values: (batch, 3, H, W) tensor
+            pixel_values: (batch, 3, H, W) tensor. If H/W differ from the
+                encoder's expected input size, the batch is resized (the dataset
+                renders 128x128 while SigLIP expects e.g. 384x384).
 
         Returns:
             (batch, num_patches, hidden_dim) tensor
         """
-        if hasattr(self.model, 'vision_model'):
-            out = self.model.vision_model(pixel_values)
-            features = out.last_hidden_state
-        elif hasattr(self.model, 'get_image_features'):
-            features = self.model.get_image_features(pixel_values)
-            if features.dim() == 2:
-                features = features.unsqueeze(1)
-        else:
-            out = self.model(pixel_values)
-            features = out.last_hidden_state
+        target = getattr(self, "input_size", 384)
+        if pixel_values.shape[-1] != target or pixel_values.shape[-2] != target:
+            pixel_values = nn.functional.interpolate(
+                pixel_values, size=(target, target),
+                mode="bilinear", align_corners=False)
 
-        if not self.use_cls_token and features.shape[1] > 1:
-            # Remove CLS token if present (keep only patch tokens)
+        features = self._extract(pixel_values)
+
+        # SigLIP produces patch tokens only (no CLS). Guard the CLS-strip so we
+        # do not accidentally drop a real patch when num_patches was detected
+        # without a CLS token.
+        if not self.use_cls_token and features.shape[1] == (self._num_patches + 1):
             features = features[:, 1:, :]
 
         return features

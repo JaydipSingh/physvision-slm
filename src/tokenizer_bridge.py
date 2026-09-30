@@ -133,3 +133,25 @@ def get_tokenizer(vocab_size: int = 32000):
         return [ord(c) % vocab_size for c in text]
 
     return _char_tokenize
+
+
+def get_hf_tokenizer(model_name: str = "Qwen/Qwen2-0.5B"):
+    """
+    Return a tokenize(text) -> list[int] callable backed by a HuggingFace
+    tokenizer. Used by the "full" config, whose language model (Qwen2-0.5B) has
+    its own vocabulary that the Rust BPE tokenizer does not match.
+
+    The returned function does not add special tokens (add_special_tokens=False),
+    so callers control the sequence layout explicitly.
+    """
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_name)
+    print(f"  [tokenizer] Using HuggingFace tokenizer for {model_name} "
+          f"(vocab {tok.vocab_size}).")
+
+    def _tokenize(text: str):
+        return tok.encode(text, add_special_tokens=False)
+
+    # Attach the underlying tokenizer for callers that need vocab size etc.
+    _tokenize.hf = tok
+    return _tokenize

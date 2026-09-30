@@ -8,8 +8,8 @@ scipy>=1.7
 Pillow>=9.0
 matplotlib>=3.5
 
-# Vision encoder (for "full" config; the "lite" config also uses it lightly)
-transformers>=4.35
-
-# Optional: for Qwen2-0.5B ("full" config)
-# accelerate>=0.20
+# Vision encoder (SigLIP) + language model (Qwen2) for the "full" config
+transformers>=4.40
+accelerate>=0.26
+sentencepiece>=0.1.99   # required by some HF tokenizers (SigLIP, Qwen2)
+protobuf>=3.20          # required by SigLIP's processor

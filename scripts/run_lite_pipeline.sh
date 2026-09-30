@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # =============================================================================
-# PhysVision-SLM Full Pipeline  (run on Apple M3 Pro)
+# PhysVision-SLM  LITE Pipeline  (CNN encoder + TinyLMv3, run on Apple M3 Pro)
 # =============================================================================
+# This is the LITE config (23M). For the SigLIP+Qwen2 FULL config, use
+# run_full_config.sh instead.
+#
 # Total time: ~8-12 hours on M3 Pro
 #   Data generation: ~30 min (10K images)
 #   Stage 1 training: ~2 hours
@@ -16,9 +19,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ---- Configure paths -------------------------------------------------------
-# Path to the pretrained TinyLMv3 checkpoint produced by paper 1 on your Mac.
-# Adjust if your slm_v2 checkpoints live elsewhere.
-LM_CHECKPOINT="${LM_CHECKPOINT:-$ROOT/../slm_v2/checkpoints/v3_long50k_final.pt}"
+# Path to the pretrained TinyLMv3 checkpoint produced by paper 1.
+# NOTE: on this machine the checkpoint lives under subword_tokenizer/slm_v2.
+LM_CHECKPOINT="${LM_CHECKPOINT:-$ROOT/../subword_tokenizer/slm_v2/checkpoints/v3_long50k_final.pt}"
 NUM_IMAGES="${NUM_IMAGES:-10000}"
 
 echo "PhysVision-SLM Pipeline"

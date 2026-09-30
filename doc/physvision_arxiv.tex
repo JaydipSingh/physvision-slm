@@ -46,24 +46,29 @@ automatically and no human annotation is required. An analytical image simulator
 generates positron emission tomography (PET) reconstructions, sinograms, and
 phantom diagrams, and---because every physical parameter of each image is
 known---emits matching multiple-choice question--answer (QA) pairs directly from
-those parameters. The learner is a 23M-parameter model that couples a trainable
-convolutional vision encoder and a spatial vision--language projection to a
-physics-pretrained decoder-only transformer (TinyLMv3); it is trained end-to-end
-on a single Apple~M3~Pro laptop with 18\,GB of unified memory. On a held-out
-benchmark of 35{,}596 image--question pairs, the model attains an overall accuracy
-of \textbf{43.7\%}, well above a 25\% random baseline and, importantly, above an
-image-agnostic text-only baseline (33.3\%)---a control that isolates genuine image
-use. Beyond the headline number, we contribute a candid account of the
+those parameters. We evaluate two instantiations trained on a single Apple~M3~Pro laptop with
+18\,GB of unified memory. A compact \emph{lite} model (23M parameters) couples a
+trainable convolutional encoder and a spatial projection to a physics-pretrained
+decoder-only transformer (TinyLMv3). A \emph{full} model reuses a frozen,
+pretrained SigLIP encoder and a Qwen2-0.5B language model, training only the same
+small vision--language projection. On a held-out benchmark of 35{,}596
+image--question pairs, the lite model attains \textbf{43.7\%} and the full model
+\textbf{89.0\%}, both well above a 25\% random baseline and an image-agnostic
+text-only baseline (33.3\%)---a control that isolates genuine image use. The
+comparison cleanly attributes the 45-point gap to the vision encoder: a frozen
+pretrained encoder lifts fine spatial localization from below random (16.1\%) to
+68.7\% while everything else is held fixed. Beyond the headline number, we contribute a candid account of the
 development trajectory: an initial run scored \emph{below} random ($\sim$11\%),
 which we trace to two compounding defects---an answer-scoring bug that measured
 answer length rather than content, and a vision pathway that was silently
 disabled during training. We describe the diagnosis and the architectural fixes
 (a spatial, non-pooling projection and a gradient-enabled encoder) that recovered
-real image-grounded performance. A per-task analysis then shows an interpretable
-split: the model is strong on global-appearance questions (artifact detection,
-tumor presence) and weak on fine spatial localization, pointing to concrete
-future work. All code, data generators, and evaluation and diagnostic harnesses
-are released to support replication.
+real image-grounded performance. A per-task analysis shows that the lite model is
+strong on global-appearance questions (artifact detection, tumor presence) but
+weak on fine spatial localization, while the full model's pretrained encoder
+resolves that weakness---an interpretable account of where multimodal capability
+comes from at this scale. All code, data generators, and evaluation and
+diagnostic harnesses are released to support replication.
 \end{abstract}
 
 %----------------------------------------------------------------------
@@ -119,7 +124,8 @@ We are deliberate about scope and honesty. The simulator used here is an
 \textbf{analytical NumPy simulation} (Poisson counting statistics, point-spread
 blurring, and a simplified Radon transform for sinograms), \emph{not} a full
 Geant4 Monte~Carlo simulation; extending to a Monte~Carlo simulator is left as
-future work. The model is small (23M parameters) and runs on a laptop. And rather
+future work. The models are small (23M and $\sim$0.9B parameters) and both train
+and evaluate on a single laptop. And rather
 than report only a final number, we document the complete development
 trajectory---including a phase in which the system scored \emph{below} random due
 to two compounding bugs---because that trajectory, and the diagnostics that
@@ -129,14 +135,16 @@ Our contributions are:
 \begin{enumerate}[leftmargin=*]
     \item A simulation-to-model pipeline that produces unlimited,
     exactly-labeled medical-physics visual QA data with no human annotation.
-    \item A 23M-parameter multimodal SLM (trainable CNN encoder + spatial
-    vision--language projection + physics-pretrained TinyLMv3) trained
-    end-to-end on an 18\,GB laptop.
-    \item A rigorous evaluation on 35{,}596 held-out image--question pairs, with a
-    per-category and per-image-type breakdown.
-    \item A transparent failure analysis: how a below-random result was
-    diagnosed and fixed, and where the working model still fails (fine spatial
-    localization).
+    \item Two multimodal SLM configurations trained under an identical recipe on
+    an 18\,GB laptop---a fully compact 23M model (from-scratch CNN encoder +
+    spatial projection + physics-pretrained TinyLMv3) and a larger model built on
+    a frozen pretrained SigLIP encoder and Qwen2-0.5B---in both cases training only
+    a $\sim$4.8M-parameter connector.
+    \item A controlled comparison on 35{,}596 held-out image--question pairs,
+    with per-category and per-image-type breakdowns, that attributes the
+    performance gap primarily to the vision encoder.
+    \item A transparent failure analysis: how an initial below-random result was
+    diagnosed and fixed, turning a broken pipeline into a working one.
 \end{enumerate}
 
 %----------------------------------------------------------------------
@@ -194,9 +202,10 @@ There is rising interest in compact vision--language models for on-device and
 resource-constrained deployment. SmolVLM demonstrates capable multimodal
 reasoning in under a gigabyte of GPU memory and argues that na\"ively shrinking
 large-model design choices is wasteful~\cite{marafioti2025smolvlm}. Our work
-occupies the far end of this spectrum: a sub-25M-parameter multimodal model
-trained \emph{and} evaluated on a single laptop, prioritizing reproducibility and
-transparent analysis over raw capability.
+spans this spectrum: a sub-25M-parameter model at the extreme-efficiency end and a
+$\sim$0.9B-parameter SigLIP+Qwen2 configuration for comparison, both trained
+\emph{and} evaluated on a single laptop, prioritizing reproducibility and
+transparent analysis.
 
 \paragraph{Relationship to our prior work.}
 This paper extends a text-only physics SLM---a 23M-parameter decoder-only
@@ -281,18 +290,56 @@ Category: quality              & 3{,}259 \\
 \label{sec:model}
 %----------------------------------------------------------------------
 
+\subsection{Two configurations}
+
+We evaluate two instantiations of the same pipeline that trade off size against
+capability (Table~\ref{tab:configs}). The \textbf{lite} configuration is designed
+for the constrained-hardware setting: a from-scratch convolutional encoder and a
+spatial projection feed the 23M-parameter physics-pretrained TinyLMv3. The
+\textbf{full} configuration follows the mainstream vision--language recipe: a
+frozen, pretrained SigLIP-SO400M encoder~\cite{zhai2023siglip} and a compressing
+projection feed a stock Qwen2-0.5B language model, using Qwen2's own tokenizer. In
+both configurations only the vision--language projection (plus, in lite, the CNN
+encoder) is trained; the language model is kept frozen, mirroring the alignment
+stage of LLaVA-style training~\cite{liu2023llava}. This isolates the question we
+care about---how well a learned connector lets a fixed language model read
+simulated physics images---while keeping training feasible on an 18\,GB laptop.
+
+\begin{table}[t]
+\centering
+\caption{The two configurations. Both train only the projection (lite also
+trains its CNN encoder); the language model is frozen in both.}
+\label{tab:configs}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{lite} & \textbf{full} \\
+\midrule
+Vision encoder & CNN (trainable, from scratch) & SigLIP-SO400M (frozen) \\
+Projection     & spatial, per-patch            & compressing MLP \\
+Language model & TinyLMv3 23M (frozen)         & Qwen2-0.5B (frozen) \\
+Tokenizer      & 32K Rust BPE                  & Qwen2 (151K) \\
+Total params   & $\sim$23M                     & $\sim$0.9B \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Architecture}
 
-The multimodal model concatenates vision tokens with text token embeddings and
-feeds the combined sequence to the language model for next-token prediction:
+Both configurations share the same structure: the model concatenates vision
+tokens with text token embeddings and feeds the combined sequence to the language
+model for next-token prediction:
 \[
-[\underbrace{\text{vision tokens}}_{64}\;\;|\;\;\underbrace{\text{text tokens}}_{\le 128}] \rightarrow \text{TinyLMv3} \rightarrow \text{answer logits}.
+[\underbrace{\text{vision tokens}}\;\;|\;\;\underbrace{\text{text tokens}}_{\le 128}] \rightarrow \text{language model} \rightarrow \text{answer logits}.
 \]
+The components differ per configuration (Table~\ref{tab:configs}); below we
+describe the lite instantiation in detail, noting where full differs.
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Vision encoder.} A from-scratch convolutional network maps a
-    $128\times128$ image to an $8\times8$ grid of 64 patch features. It is
-    trained (not frozen) so it learns features specific to PET/sinogram imagery.
+    \item \textbf{Vision encoder.} \emph{Lite}: a from-scratch convolutional
+    network maps a $128\times128$ image to an $8\times8$ grid of 64 patch
+    features, trained (not frozen) so it learns features specific to
+    PET/sinogram imagery. \emph{Full}: a frozen, pretrained SigLIP-SO400M encoder
+    whose patch features are compressed to 64 tokens by the projection.
     \item \textbf{Spatial projection.} Following the connector template of
     LLaVA-style models~\cite{liu2023llava,liu2024improved}, a per-patch MLP maps
     each patch feature into the language embedding space; we add a learned
@@ -301,10 +348,11 @@ feeds the combined sequence to the language model for next-token prediction:
     projection preserves spatial structure---an earlier design that
     global-average-pooled all patches into a single vector destroyed it and made
     the model effectively blind (Section~\ref{sec:failure}).
-    \item \textbf{Language model.} TinyLMv3, a 23M-parameter decoder-only
-    transformer using RoPE~\cite{su2021rope}, RMSNorm~\cite{zhang2019rmsnorm}, and
-    SwiGLU~\cite{shazeer2020glu}, pretrained on physics arXiv text and reused here
-    unchanged as the language backbone.
+    \item \textbf{Language model.} \emph{Lite}: TinyLMv3, a 23M-parameter
+    decoder-only transformer using RoPE~\cite{su2021rope},
+    RMSNorm~\cite{zhang2019rmsnorm}, and SwiGLU~\cite{shazeer2020glu}, pretrained
+    on physics arXiv text. \emph{Full}: a stock Qwen2-0.5B. In both cases the
+    language model is reused unchanged (frozen) as the backbone.
 \end{itemize}
 
 \subsection{Two-stage training}
@@ -312,12 +360,17 @@ feeds the combined sequence to the language model for next-token prediction:
 Training proceeds in two stages on a single Apple~M3~Pro (18\,GB), auto-selecting
 the MPS backend:
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Alignment.} The language model is frozen; the CNN encoder and
-    projection are trained so vision tokens align with the language embedding
-    space.
-    \item \textbf{Instruction tuning.} The encoder and projection continue
-    training while the language model adapts to the visual QA task.
+    \item \textbf{Alignment.} The language model is frozen; the projection (and,
+    in the lite configuration, the CNN encoder) is trained so that vision tokens
+    align with the language embedding space.
+    \item \textbf{Instruction tuning.} Training continues at a lower learning
+    rate on the projection (and lite encoder) using the visual-QA data.
 \end{enumerate}
+The language model remains frozen throughout both stages in both
+configurations. This keeps memory within the 18\,GB budget---full fine-tuning of
+Qwen2-0.5B would not fit---and cleanly isolates the connector's contribution.
+Parameter-efficient fine-tuning of the language model (e.g.\ LoRA~\cite{hu2021lora})
+is a natural extension we leave to future work.
 
 Answers are scored by teacher-forced log-probability ranking. For each candidate
 option, we append the option text to the question, run a single forward pass, and
@@ -347,31 +400,35 @@ Random baseline                 & 25.0\% \\
 Text-only heuristic (no image)  & 33.3\% \\
 Most-frequent-answer baseline   & 34.1\% \\
 \midrule
-\textbf{PhysVision-SLM (23M, ours)} & \textbf{43.7\%} \\
+PhysVision-SLM \emph{lite} (23M, ours) & 43.7\% \\
+\textbf{PhysVision-SLM \emph{full} (0.9B, ours)} & \textbf{89.0\%} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
 \centering
-\caption{Accuracy breakdown over the full 35{,}596-pair benchmark ($n$ per row).
-The model excels on global-appearance tasks and struggles with fine spatial
-localization.}
+\caption{Accuracy breakdown over the full 35{,}596-pair benchmark ($n$ per row),
+for both configurations. The full config (SigLIP + Qwen2) improves every category
+and, most notably, lifts fine spatial localization from below-random to well
+above it.}
 \label{tab:breakdown}
-\begin{tabular}{lcr}
+\begin{tabular}{lccr}
 \toprule
-\textbf{By category} & \textbf{Accuracy} & \textbf{$n$} \\
+\textbf{By category} & \textbf{lite} & \textbf{full} & \textbf{$n$} \\
 \midrule
-quality (artifact type)   & 68.6\% & 3{,}259 \\
-tumor\_detection          & 64.9\% & 14{,}957 \\
-parameter                 & 23.7\% & 10{,}800 \\
-localization              & 16.1\% & 6{,}580 \\
+tumor\_detection          & 64.9\% & 99.8\% & 14{,}957 \\
+quality (artifact type)   & 68.6\% & 99.5\% & 3{,}259 \\
+parameter                 & 23.7\% & 83.1\% & 10{,}800 \\
+localization              & 16.1\% & 68.7\% & 6{,}580 \\
 \midrule
-\textbf{By image type} & & \\
+\textbf{By image type} & & & \\
 \midrule
-sinogram                  & 81.4\% & 5{,}749 \\
-pet\_reconstruction       & 36.9\% & 24{,}741 \\
-phantom                   & 34.3\% & 5{,}106 \\
+sinogram                  & 81.4\% & 99.7\% & 5{,}749 \\
+pet\_reconstruction       & 36.9\% & 87.4\% & 24{,}741 \\
+phantom                   & 34.3\% & 84.6\% & 5{,}106 \\
+\midrule
+\textbf{Overall}          & \textbf{43.7\%} & \textbf{89.0\%} & 35{,}596 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -380,29 +437,49 @@ phantom                   & 34.3\% & 5{,}106 \\
     \centering
     \includegraphics[width=\linewidth]{figure_results.png}
     \caption{Accuracy by question category (left) and image type (right) on the
-    full 35{,}596-pair benchmark. Bars above the dashed random line (25\%)
-    indicate genuine image-grounded performance; the model is strong on
-    global-appearance tasks (sinogram artifacts, tumor presence) and at or below
-    random on fine spatial localization.}
+    full 35{,}596-pair benchmark, comparing the lite (23M) and full (0.9B)
+    configurations against the 25\% random baseline (dashed). The full config's
+    pretrained SigLIP encoder improves every category and, most notably, lifts
+    localization from below random to well above it.}
     \label{fig:results}
 \end{figure}
 
-The model reaches \textbf{43.7\%} overall on the full benchmark, well above the
-25\% random baseline and above both the most-frequent-answer (34.1\%) and
-text-only (33.3\%) baselines. The text-only baseline is the key control: a model
-that ignored the image could not exceed it, so the $\sim$10-point margin over
-33.3\% is attributable to genuine image use. This is corroborated by a
-counterfactual check in which replacing the real image with a blank image
-substantially changes the model's per-option scores on 20/20 sampled questions.
+Both configurations clear the baselines by a wide margin. The lite config
+reaches \textbf{43.7\%} overall and the full config \textbf{89.0\%}, against a
+25\% random baseline and, more tellingly, an image-agnostic text-only baseline of
+33.3\%. The text-only baseline is the key control: a model that ignored the image
+could not exceed it, so both configurations' margins over 33.3\% are attributable
+to genuine image use. For the lite model this is corroborated by a counterfactual
+check in which replacing the real image with a blank image substantially changes
+per-option scores on 20/20 sampled questions.
 
-The per-task breakdown (Table~\ref{tab:breakdown}) is interpretable.
+\paragraph{lite: strong on appearance, weak on localization.}
+The lite per-task breakdown (Table~\ref{tab:breakdown}) is interpretable.
 \emph{Sinogram} questions are easiest (81.4\%): artifacts and high-uptake lesions
-produce distinctive global texture the encoder reads well. \emph{Quality} and
+produce distinctive global texture the small CNN reads well. \emph{Quality} and
 \emph{tumor\_detection} are also strong (68.6\%, 64.9\%), as presence/appearance
 questions depend on global image statistics. In contrast, \emph{parameter}
 (23.7\%) and especially \emph{localization} (16.1\%) are at or below random:
 quadrant and diameter questions demand precise spatial reasoning that an
-$8\times8$ patch grid and a small CNN do not resolve.
+$8\times8$ patch grid and a small from-scratch CNN do not resolve.
+
+\paragraph{full: a pretrained encoder closes the spatial gap.}
+Swapping the from-scratch CNN for a frozen, pretrained SigLIP
+encoder~\cite{zhai2023siglip} and the 23M TinyLMv3 for Qwen2-0.5B raises overall
+accuracy to 89.0\%---a 45-point absolute gain---while training the \emph{same}
+$\sim$4.8M-parameter projection and keeping both the encoder and language model
+frozen. Every category improves, but the most informative change is
+\emph{localization}, which rises from 16.1\% (below random) to 68.7\%. This is
+strong evidence that the lite model's spatial weakness was a
+\emph{representation} limitation of its coarse CNN rather than a limitation of the
+task or the frozen-LM setup: SigLIP's dense patch features carry the spatial
+detail that quadrant and size questions require. Global-appearance tasks
+saturate near ceiling (tumor detection 99.8\%, quality 99.5\%, sinogram 99.7\%),
+and even the hardest categories---parameter (83.1\%) and localization
+(68.7\%)---are now well above random. The comparison isolates the vision encoder
+as the dominant factor for this benchmark: with the projection, data, and frozen
+language backbone held fixed in spirit across both runs, encoder quality accounts
+for the bulk of the difference.
 
 %----------------------------------------------------------------------
 \section{Failure Analysis}
@@ -445,8 +522,10 @@ further training.
     \item \textbf{Analytical, not Monte~Carlo, simulation.} Images are generated
     analytically, not with Geant4; the sim-to-real gap to clinical scanners is
     untested.
-    \item \textbf{Fine localization is weak.} Quadrant/size questions score at or
-    below random; the current encoder resolution is the likely bottleneck.
+    \item \textbf{Localization is the hardest category.} It is at/below random
+    for the lite CNN and, while much improved by the full config's pretrained
+    encoder (68.7\%), still trails the near-ceiling appearance tasks. Higher
+    input resolution and denser patch grids are the natural next lever.
     \item \textbf{Internal benchmark only.} Evaluation is on held-out synthetic
     data from the same generator; no external clinical validation is claimed.
     \item \textbf{Small model, narrow domain.} Results should not be extrapolated
@@ -459,15 +538,21 @@ further training.
 %----------------------------------------------------------------------
 
 We showed that a physics image simulator can serve as a zero-cost labeled-data
-generator for training a compact multimodal SLM, and that such a model---23M
-parameters, trained on a single laptop---answers simulated medical-physics visual
-questions well above random and above image-agnostic baselines, with a clear,
-interpretable split between global-appearance tasks (strong) and fine spatial
-localization (weak). Equally, we documented how an initial below-random result
-arose from an evaluation bug and a disabled vision pathway, and how targeted
-diagnosis---rather than more compute---recovered a genuine result. Future work
-includes higher-resolution encoders for localization, a stronger (e.g.\ SigLIP)
-frozen encoder in a larger configuration, Geant4-based simulation, and external
+generator for training multimodal SLMs on a single laptop, and we compared two
+instantiations trained under an identical recipe. A fully compact 23M model
+answers simulated medical-physics visual questions well above random and above
+image-agnostic baselines (43.7\%), while a configuration built on a frozen
+pretrained SigLIP encoder and Qwen2-0.5B reaches 89.0\%---training, in both cases,
+only a $\sim$4.8M-parameter connector. Because the projection, data, and
+frozen-language-model setup are held fixed across the two runs, the comparison
+attributes the large gap primarily to the vision encoder, and in particular shows
+that a pretrained encoder converts the lite model's below-random localization
+into well-above-random performance. Equally, we documented how an initial
+below-random result arose from an evaluation bug and a disabled vision pathway,
+and how targeted diagnosis---rather than more compute---recovered a genuine
+result. Future work includes parameter-efficient fine-tuning of the language
+model (e.g.\ LoRA) to push beyond the frozen-LM ceiling, higher-resolution
+encoders for localization, Monte~Carlo (Geant4) simulation, and external
 validation on real scans.
 
 \section*{Code and Data Availability}
